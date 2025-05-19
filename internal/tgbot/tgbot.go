@@ -14,93 +14,114 @@ import (
 func Run(bot *tgbotapi.BotAPI, db *sql.DB) error {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates, err := bot.GetUpdatesChan(u)
 	if err != nil {
 		return fmt.Errorf("failed to get updates: %w", err)
+	}
+
+	courses, err := storage.GetCourses(db)
+	if err != nil {
+		return fmt.Errorf("failed to fetch courses: %w", err)
 	}
 
 	for update := range updates {
 		if update.Message == nil {
 			continue
 		}
-
-		handleUpdate(bot, db, update)
+		HandleConversation(bot, courses, update)
 	}
 
 	return nil
 }
 
-func handleUpdate(bot *tgbotapi.BotAPI, db *sql.DB, update tgbotapi.Update) {
-	text := strings.ToLower(update.Message.Text)
-	chatID := update.Message.Chat.ID
+var userStates = make(map[int64]*entities.UserState)
 
-	courses, err := storage.GetCourses(db)
-	if err != nil {
-		log.Printf("DB error: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка при получении курсов.")
-		bot.Send(msg)
-		return
-	}
+func HandleConversation(bot *tgbotapi.BotAPI, courses []entities.Course, update tgbotapi.Update) {
+	text := update.Message.Text
+	chatID := update.Message.Chat.ID
+	userState := getUserState(chatID)
 
 	var msg tgbotapi.MessageConfig
 
-	switch {
-	case strings.HasPrefix(text, "/courses"):
-		msg = tgbotapi.NewMessage(chatID, formatCourses(courses))
+	switch userState.Step {
+	case "":
+		msg = handleInitialStep(chatID, text, userState, courses)
 
-	case strings.HasPrefix(text, "/teachers"):
-		msg = tgbotapi.NewMessage(chatID, formatTeachers(courses))
+	case "waiting_for_course_selection":
+		msg = handleCourseSelection(chatID, text, userState, courses)
 
-	case strings.HasPrefix(text, "/schedule"):
-		msg = tgbotapi.NewMessage(chatID, formatSchedule(courses))
+	case "waiting_for_payment_confirmation":
+		msg = handlePaymentConfirmation(chatID, text, userState)
+
+	case "payment_successful":
+		msg = tgbotapi.NewMessage(chatID, "Напишите 'Выбрать курс' для начала.")
+		userState.Step = ""
 
 	default:
-		msg = tgbotapi.NewMessage(chatID, handleFallback(text))
+		msg = tgbotapi.NewMessage(chatID, "Неизвестный шаг. Напишите 'Выбрать курс' для начала.")
+		userState.Step = ""
 	}
 
 	if _, err := bot.Send(msg); err != nil {
-		log.Printf("Ошибка отправки сообщения: %v", err)
+		log.Printf("Error sending message: %v", err)
 	}
 }
 
-func formatCourses(courses []entities.Course) string {
-	var b strings.Builder
-	b.WriteString("Доступные курсы:\n\n")
-	for _, course := range courses {
-		b.WriteString(fmt.Sprintf(
-			"Название: %s\nУровень: %s\nПреподаватель: %s\nВремя: %s\nОписание: %s\n\n",
-			course.Name, course.Level, course.Teacher, course.Schedule, course.Description,
+func getUserState(chatID int64) *entities.UserState {
+	if state, exists := userStates[chatID]; exists {
+		return state
+	}
+	userStates[chatID] = &entities.UserState{}
+	return userStates[chatID]
+}
+
+func handleInitialStep(chatID int64, text string, state *entities.UserState, courses []entities.Course) tgbotapi.MessageConfig {
+	if strings.EqualFold(text, "Выбрать курс") {
+		var b strings.Builder
+		b.WriteString("Выберите курс:\n\n")
+		for i, course := range courses {
+			b.WriteString(fmt.Sprintf(
+				"%d) %s\nУровень: %s\nПреподаватель: %s\nВремя: %s\nОписание: %s\nЦена: %.2f₽\n\n",
+				i+1, course.Name, course.Level, course.Teacher, course.Schedule, course.Description, course.Price,
+			))
+		}
+		b.WriteString("Отправьте номер курса для выбора.")
+		state.Step = "waiting_for_course_selection"
+		return tgbotapi.NewMessage(chatID, b.String())
+	}
+
+	return tgbotapi.NewMessage(chatID, "Привет! Напишите 'Выбрать курс' чтобы выбрать курс.")
+}
+
+func handleCourseSelection(chatID int64, text string, state *entities.UserState, courses []entities.Course) tgbotapi.MessageConfig {
+	courseNumber, err := parseCourseSelection(text)
+	if err == nil && courseNumber >= 1 && courseNumber <= len(courses) {
+		selectedCourse := &courses[courseNumber-1]
+		state.Selected = selectedCourse
+		state.Step = "waiting_for_payment_confirmation"
+		return tgbotapi.NewMessage(chatID, fmt.Sprintf(
+			"Вы выбрали курс: %s.\nЦена: %.2f₽\nХотите оплатить? Напишите 'Да' или 'Нет'.",
+			selectedCourse.Name, selectedCourse.Price,
 		))
 	}
-	return b.String()
+
+	return tgbotapi.NewMessage(chatID, "Неверный номер курса. Пожалуйста, выберите курс по номеру.")
 }
 
-func formatTeachers(courses []entities.Course) string {
-	var b strings.Builder
-	b.WriteString("Преподаватели:\n\n")
-	for _, course := range courses {
-		b.WriteString(fmt.Sprintf("Преподаватель: %s — %s\n", course.Teacher, course.Name))
+func handlePaymentConfirmation(chatID int64, text string, state *entities.UserState) tgbotapi.MessageConfig {
+	if strings.EqualFold(text, "Да") {
+		state.Step = "payment_successful"
+		return tgbotapi.NewMessage(chatID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!")
+	} else if strings.EqualFold(text, "Нет") {
+		state.Step = ""
+		return tgbotapi.NewMessage(chatID, "Хорошо, подумайте еще. Напишите 'Выбрать курс', чтобы изменить выбор.")
 	}
-	return b.String()
+
+	return tgbotapi.NewMessage(chatID, "Пожалуйста, напишите 'Да' если вы оплатили, или 'Нет' если еще не оплатили.")
 }
 
-func formatSchedule(courses []entities.Course) string {
-	var b strings.Builder
-	b.WriteString("Расписание курсов:\n\n")
-	for _, course := range courses {
-		b.WriteString(fmt.Sprintf("Курс: %s — Время: %s\n", course.Name, course.Schedule))
-	}
-	return b.String()
-}
-
-func handleFallback(text string) string {
-	switch {
-	case strings.Contains(text, "привет"):
-		return "Привет! Я могу помочь выбрать курс. Напиши /courses."
-	case strings.Contains(text, "как дела"):
-		return "У меня все отлично, спасибо! Напиши /courses для списка курсов."
-	default:
-		return "Я не понял. Напиши /courses или /schedule."
-	}
+func parseCourseSelection(input string) (int, error) {
+	var number int
+	_, err := fmt.Sscanf(input, "%d", &number)
+	return number, err
 }

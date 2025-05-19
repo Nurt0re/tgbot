@@ -20,7 +20,8 @@ func InitDB() (*sql.DB, error) {
 		level TEXT,
 		teacher TEXT,
 		schedule TEXT,
-		description TEXT
+		description TEXT,
+		price REAL
 	);`
 
 	_, err = db.Exec(createTable)
@@ -30,6 +31,7 @@ func InitDB() (*sql.DB, error) {
 
 	return db, nil
 }
+
 func SeedCourses(db *sql.DB) {
 	rows, _ := db.Query("SELECT id FROM courses LIMIT 1")
 	defer rows.Close()
@@ -38,21 +40,42 @@ func SeedCourses(db *sql.DB) {
 	}
 
 	courses := []entities.Course{
-		{"Go для начинающих", "Начальный", "Иван Иванов", "Понедельно, 18:00-20:00", "Основы языка Go. Изучение синтаксиса и базовых структур данных."},
-		{"Go для продвинутых", "Продвинутый", "Алексей Петров", "Вторник и четверг, 19:00-21:00", "Продвинутые техники работы с Go, асинхронное программирование, паттерны проектирования."},
-		{"Python для начинающих", "Начальный", "Мария Сидорова", "Среда, 17:00-19:00", "Основы Python. Создание простых программ и работа с библиотеками."},
+		{
+			Name:        "Go для начинающих",
+			Level:       "Начальный",
+			Teacher:     "Иван Иванов",
+			Schedule:    "Понедельно, 18:00-20:00",
+			Description: "Основы языка Go. Изучение синтаксиса и базовых структур данных.",
+			Price:       9900.00,
+		},
+		{
+			Name:        "Go для продвинутых",
+			Level:       "Продвинутый",
+			Teacher:     "Алексей Петров",
+			Schedule:    "Вторник и четверг, 19:00-21:00",
+			Description: "Продвинутые техники работы с Go, асинхронное программирование, паттерны проектирования.",
+			Price:       14900.00,
+		},
+		{
+			Name:        "Python для начинающих",
+			Level:       "Начальный",
+			Teacher:     "Мария Сидорова",
+			Schedule:    "Среда, 17:00-19:00",
+			Description: "Основы Python. Создание простых программ и работа с библиотеками.",
+			Price:       8900.00,
+		},
 	}
 
-	stmt, _ := db.Prepare("INSERT INTO courses(name, level, teacher, schedule, description) VALUES (?, ?, ?, ?, ?)")
+	stmt, _ := db.Prepare("INSERT INTO courses(name, level, teacher, schedule, description, price) VALUES (?, ?, ?, ?, ?, ?)")
 	defer stmt.Close()
 
 	for _, course := range courses {
-		stmt.Exec(course.Name, course.Level, course.Teacher, course.Schedule, course.Description)
+		stmt.Exec(course.Name, course.Level, course.Teacher, course.Schedule, course.Description, course.Price)
 	}
 }
 
 func GetCourses(db *sql.DB) ([]entities.Course, error) {
-	rows, err := db.Query("SELECT name, level, teacher, schedule, description FROM courses")
+	rows, err := db.Query("SELECT name, level, teacher, schedule, description, price FROM courses")
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +84,7 @@ func GetCourses(db *sql.DB) ([]entities.Course, error) {
 	var courses []entities.Course
 	for rows.Next() {
 		var c entities.Course
-		if err := rows.Scan(&c.Name, &c.Level, &c.Teacher, &c.Schedule, &c.Description); err != nil {
+		if err := rows.Scan(&c.Name, &c.Level, &c.Teacher, &c.Schedule, &c.Description, &c.Price); err != nil {
 			return nil, err
 		}
 		courses = append(courses, c)
