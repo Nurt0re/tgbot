@@ -8,12 +8,21 @@ type Course struct {
 	Schedule    string
 	Description string
 }
+
 type UserState struct {
 	Step     string
+	Name     string
 	Selected *Course
 }
+
 type Message struct {
 	Role      string
 	Text      string
 	Timestamp string
+}
+type Enrollment struct {
+	Name       string
+	CourseName string
+	IsPaid     bool
+	Timestamp  string
 }

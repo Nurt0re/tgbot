@@ -2,8 +2,9 @@ package storage
 
 import (
 	"database/sql"
-	"tgbot/internal/entities"
 	"time"
+
+	"tgbot/internal/entities"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -39,6 +40,14 @@ func initTables(db *sql.DB) error {
 			message TEXT,
 			timestamp DATETIME
 		);`,
+		`CREATE TABLE IF NOT EXISTS enrollments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER,
+	name TEXT,
+	course_name TEXT,
+	is_paid BOOLEAN,
+	timestamp DATETIME
+);`,
 	}
 
 	for _, stmt := range schema {
@@ -47,6 +56,37 @@ func initTables(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func SaveEnrollment(db *sql.DB, userID int64, name, courseName string, isPaid bool) error {
+	query := `
+	INSERT INTO enrollments(user_id, name, course_name, is_paid, timestamp)
+	VALUES (?, ?, ?, ?, ?);`
+	_, err := db.Exec(query, userID, name, courseName, isPaid, time.Now())
+	return err
+}
+
+func GetAllEnrollments(db *sql.DB) ([]entities.Enrollment, error) {
+	query := `SELECT name, course_name, is_paid, timestamp FROM enrollments ORDER BY timestamp DESC`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []entities.Enrollment
+	for rows.Next() {
+		var e entities.Enrollment
+		var ts time.Time
+		err := rows.Scan(&e.Name, &e.CourseName, &e.IsPaid, &ts)
+		if err != nil {
+			return nil, err
+		}
+		e.Timestamp = ts.Format("2006-01-02 15:04:05")
+		results = append(results, e)
+	}
+
+	return results, nil
 }
 
 func SeedCourses(db *sql.DB) {
@@ -116,6 +156,7 @@ func SaveMessage(db *sql.DB, userID int64, role, message string) error {
 	_, err := db.Exec(query, userID, role, message, time.Now())
 	return err
 }
+
 func GetConversationHistory(db *sql.DB, userID int64) ([]entities.Message, error) {
 	query := `SELECT role, message, timestamp FROM conversations WHERE user_id = ? ORDER BY timestamp ASC`
 	rows, err := db.Query(query, userID)
