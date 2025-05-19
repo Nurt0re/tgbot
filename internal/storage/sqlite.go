@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"tgbot/internal/entities"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -13,23 +14,39 @@ func InitDB() (*sql.DB, error) {
 		return nil, err
 	}
 
-	createTable := `
-	CREATE TABLE IF NOT EXISTS courses (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT,
-		level TEXT,
-		teacher TEXT,
-		schedule TEXT,
-		description TEXT,
-		price REAL
-	);`
-
-	_, err = db.Exec(createTable)
-	if err != nil {
+	if err := initTables(db); err != nil {
 		return nil, err
 	}
 
 	return db, nil
+}
+
+func initTables(db *sql.DB) error {
+	schema := []string{
+		`CREATE TABLE IF NOT EXISTS courses (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			level TEXT,
+			teacher TEXT,
+			schedule TEXT,
+			description TEXT,
+			price REAL
+		);`,
+		`CREATE TABLE IF NOT EXISTS conversations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER,
+			role TEXT,
+			message TEXT,
+			timestamp DATETIME
+		);`,
+	}
+
+	for _, stmt := range schema {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func SeedCourses(db *sql.DB) {
@@ -90,4 +107,32 @@ func GetCourses(db *sql.DB) ([]entities.Course, error) {
 		courses = append(courses, c)
 	}
 	return courses, nil
+}
+
+func SaveMessage(db *sql.DB, userID int64, role, message string) error {
+	query := `
+	INSERT INTO conversations(user_id, role, message, timestamp)
+	VALUES (?, ?, ?, ?);`
+	_, err := db.Exec(query, userID, role, message, time.Now())
+	return err
+}
+func GetConversationHistory(db *sql.DB, userID int64) ([]entities.Message, error) {
+	query := `SELECT role, message, timestamp FROM conversations WHERE user_id = ? ORDER BY timestamp ASC`
+	rows, err := db.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []entities.Message
+	for rows.Next() {
+		var msg entities.Message
+		var ts time.Time
+		if err := rows.Scan(&msg.Role, &msg.Text, &ts); err != nil {
+			return nil, err
+		}
+		msg.Timestamp = ts.Format("2006-01-02 15:04:05")
+		history = append(history, msg)
+	}
+	return history, nil
 }

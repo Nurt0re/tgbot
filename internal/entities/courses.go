@@ -12,3 +12,8 @@ type UserState struct {
 	Step     string
 	Selected *Course
 }
+type Message struct {
+	Role      string
+	Text      string
+	Timestamp string
+}
