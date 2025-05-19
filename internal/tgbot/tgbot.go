@@ -13,6 +13,65 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
+type TestQuestion struct {
+	Question string
+	Options  []string
+	Answer   int // индекс правильного ответа (0–3)
+}
+
+var testQuestions = []TestQuestion{
+	{
+		Question: "Что такое переменная в программировании?",
+		Options:  []string{"Константа", "Указатель", "Область памяти с именем", "Цикл"},
+		Answer:   2,
+	},
+	{
+		Question: "Какой тип данных используется для целых чисел в Go?",
+		Options:  []string{"float", "string", "bool", "int"},
+		Answer:   3,
+	},
+	{
+		Question: "Какой символ используется для начала комментария в Go?",
+		Options:  []string{"//", "#", "--", "/*"},
+		Answer:   0,
+	},
+	{
+		Question: "Как объявить функцию в Go?",
+		Options:  []string{"def", "function", "func", "fn"},
+		Answer:   2,
+	},
+	{
+		Question: "Какой ключ используется для условного оператора?",
+		Options:  []string{"case", "for", "switch", "if"},
+		Answer:   3,
+	},
+	{
+		Question: "Как создать срез в Go?",
+		Options:  []string{"array()", "[]", "slice{}", "{}"},
+		Answer:   1,
+	},
+	{
+		Question: "Что такое goroutine?",
+		Options:  []string{"Тип данных", "Функция", "Отдельный поток выполнения", "Модуль"},
+		Answer:   2,
+	},
+	{
+		Question: "Как обозначается цикл с 5 итерациями?",
+		Options:  []string{"repeat 5", "for i := 0; i < 5; i++", "loop 5", "foreach 5"},
+		Answer:   1,
+	},
+	{
+		Question: "Какой оператор используется для присваивания?",
+		Options:  []string{"==", "->", "=", ":="},
+		Answer:   2,
+	},
+	{
+		Question: "Как обозначается пакет в начале файла Go?",
+		Options:  []string{"import", "package", "main", "module"},
+		Answer:   1,
+	},
+}
+
 func Run(bot *tgbotapi.BotAPI, db *sql.DB) error {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -56,11 +115,17 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 
 	if userState.Step == "waiting_for_name" {
 		userState.Name = strings.TrimSpace(text)
-		userState.Step = ""
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Спасибо, %s! Теперь напиши 'Выбрать курс', чтобы продолжить.", userState.Name))
-		if _, err := bot.Send(msg); err != nil {
-			log.Printf("Ошибка при отправке подтверждения имени: %v", err)
-		}
+		userState.Step = "taking_test"
+		userState.IsTakingTest = true
+		userState.TestIndex = 0
+		userState.TestScore = 0
+
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Спасибо, %s! Сейчас начнётся тест из 10 вопросов. Отвечай, выбрав номер варианта от 1 до 4.", userState.Name)))
+		sendTestQuestion(bot, chatID, 0)
+		return
+	}
+	if userState.IsTakingTest {
+		handleTestStep(bot, botDB, chatID, text, userState, courses)
 		return
 	}
 
@@ -302,5 +367,84 @@ func sendSchedules(bot *tgbotapi.BotAPI, chatID int64, courses []entities.Course
 	for _, course := range courses {
 		b.WriteString(fmt.Sprintf("- %s: %s\n", course.Name, course.Schedule))
 	}
+	bot.Send(tgbotapi.NewMessage(chatID, b.String()))
+}
+
+func sendTestQuestion(bot *tgbotapi.BotAPI, chatID int64, index int) {
+	q := testQuestions[index]
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("❓ %s\n", q.Question))
+	for i, option := range q.Options {
+		b.WriteString(fmt.Sprintf("%d) %s\n", i+1, option))
+	}
+	bot.Send(tgbotapi.NewMessage(chatID, b.String()))
+}
+
+func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer string, state *entities.UserState, courses []entities.Course) {
+	answerIndex := -1
+	_, err := fmt.Sscanf(userAnswer, "%d", &answerIndex)
+
+	// Проверка: введено не число или не от 1 до 4
+	if err != nil || answerIndex < 1 || answerIndex > 4 {
+		msg := tgbotapi.NewMessage(chatID, "Пожалуйста, введите число от 1 до 4.")
+		bot.Send(msg)
+		// Повторить текущий вопрос
+		sendTestQuestion(bot, chatID, state.TestIndex)
+		return
+	}
+
+	// Проверка ответа
+	if answerIndex-1 == testQuestions[state.TestIndex].Answer {
+		state.TestScore++
+	}
+
+	state.TestIndex++
+
+	if state.TestIndex >= len(testQuestions) {
+		state.IsTakingTest = false
+		state.Step = ""
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Тест завершён! Вы набрали %d из %d баллов.", state.TestScore, len(testQuestions))))
+		sendRecommendedCourses(bot, db, chatID, state.TestScore)
+
+		// Немного подождать перед следующим шагом
+		time.Sleep(2 * time.Second)
+
+		// Перевести пользователя к выбору курса
+		state.Step = "waiting_for_course_selection"
+		msg := handleInitialStep(chatID, "Выбрать курс", state, courses)
+		bot.Send(msg)
+		return
+	}
+
+	// Следующий вопрос
+	sendTestQuestion(bot, chatID, state.TestIndex)
+}
+
+func sendRecommendedCourses(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, score int) {
+	var level string
+	if score <= 3 {
+		level = "Начальный"
+	} else if score <= 7 {
+		level = "Средний"
+	} else {
+		level = "Продвинутый"
+	}
+
+	courses, _ := storage.GetCourses(db) // если нужно — передай подключение
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("📚 Курсы уровня \"%s\":\n\n", level))
+	i := 1
+	for _, course := range courses {
+		if strings.EqualFold(course.Level, level) {
+			b.WriteString(fmt.Sprintf("%d) %s — %.2f₽\n", i, course.Name, course.Price))
+			i++
+		}
+	}
+
+	if i == 1 {
+		b.WriteString("Нет доступных курсов для этого уровня.")
+	}
+
 	bot.Send(tgbotapi.NewMessage(chatID, b.String()))
 }

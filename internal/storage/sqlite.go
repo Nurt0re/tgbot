@@ -121,6 +121,30 @@ func SeedCourses(db *sql.DB) {
 			Description: "Основы Python. Создание простых программ и работа с библиотеками.",
 			Price:       8900.00,
 		},
+		{
+			Name:        "Основы программирования на C++",
+			Level:       "Начальный",
+			Teacher:     "Олег Никитин",
+			Schedule:    "Понедельник, 10:00-12:00",
+			Description: "Базовые конструкции языка C++, типы данных, работа с памятью.",
+			Price:       9200.00,
+		},
+		{
+			Name:        "Разработка веб-приложений на Django",
+			Level:       "Средний",
+			Teacher:     "Ирина Лебедева",
+			Schedule:    "Среда, 14:00-16:00",
+			Description: "Работа с Django, маршрутизация, шаблоны, базы данных.",
+			Price:       13500.00,
+		},
+		{
+			Name:        "Архитектура микросервисов на Go",
+			Level:       "Продвинутый",
+			Teacher:     "Дмитрий Волков",
+			Schedule:    "Пятница, 18:00-20:00",
+			Description: "gRPC, Docker, Kubernetes и построение масштабируемых сервисов.",
+			Price:       18900.00,
+		},
 	}
 
 	stmt, _ := db.Prepare("INSERT INTO courses(name, level, teacher, schedule, description, price) VALUES (?, ?, ?, ?, ?, ?)")

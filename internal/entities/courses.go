@@ -10,9 +10,12 @@ type Course struct {
 }
 
 type UserState struct {
-	Step     string
-	Name     string
-	Selected *Course
+	Step         string
+	Name         string
+	Selected     *Course
+	TestIndex    int
+	TestScore    int
+	IsTakingTest bool
 }
 
 type Message struct {
