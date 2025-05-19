@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
+
 	"tgbot/internal/entities"
 	"tgbot/internal/storage"
 
@@ -51,7 +53,7 @@ func HandleConversation(bot *tgbotapi.BotAPI, courses []entities.Course, update 
 		msg = handleCourseSelection(chatID, text, userState, courses)
 
 	case "waiting_for_payment_confirmation":
-		msg = handlePaymentConfirmation(chatID, text, userState)
+		msg = handlePaymentConfirmation(chatID, text, userState, bot)
 
 	case "payment_successful":
 		msg = tgbotapi.NewMessage(chatID, "Напишите 'Выбрать курс' для начала.")
@@ -108,12 +110,13 @@ func handleCourseSelection(chatID int64, text string, state *entities.UserState,
 	return tgbotapi.NewMessage(chatID, "Неверный номер курса. Пожалуйста, выберите курс по номеру.")
 }
 
-func handlePaymentConfirmation(chatID int64, text string, state *entities.UserState) tgbotapi.MessageConfig {
+func handlePaymentConfirmation(chatID int64, text string, state *entities.UserState, bot *tgbotapi.BotAPI) tgbotapi.MessageConfig {
 	if strings.EqualFold(text, "Да") {
 		state.Step = "payment_successful"
 		return tgbotapi.NewMessage(chatID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!")
 	} else if strings.EqualFold(text, "Нет") {
 		state.Step = ""
+		go remindUserLater(bot, chatID)
 		return tgbotapi.NewMessage(chatID, "Хорошо, подумайте еще. Напишите 'Выбрать курс', чтобы изменить выбор.")
 	}
 
@@ -124,4 +127,18 @@ func parseCourseSelection(input string) (int, error) {
 	var number int
 	_, err := fmt.Sscanf(input, "%d", &number)
 	return number, err
+}
+
+func remindUserLater(bot *tgbotapi.BotAPI, chatID int64) {
+	// Ожидание 5 минут
+	time.Sleep(1 * time.Minute)
+
+	// Отправляем напоминание, если пользователь не оплатил
+	userState := getUserState(chatID)
+	if userState.Step == "" || userState.Step == "waiting_for_course_selection" {
+		msg := tgbotapi.NewMessage(chatID, "Вы еще не выбрали курс или не завершили оплату. Напишите 'Выбрать курс' чтобы начать заново.")
+		if _, err := bot.Send(msg); err != nil {
+			log.Printf("Error sending reminder: %v", err)
+		}
+	}
 }
