@@ -10,25 +10,52 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var bot *tgbotapi.BotAPI
+
 type Course struct {
-	Name        string
-	Level       string
-	Teacher     string
-	Schedule    string
-	Description string
+	Name  string
+	Level string
+	Price float64
 }
 
+var courses = []Course{
+	{
+		Name:  "Go для начинающих",
+		Level: "Начальный",
+		Price: 1000.0,
+	},
+	{
+		Name:  "Go для продвинутых",
+		Level: "Продвинутый",
+		Price: 1500.0,
+	},
+	{
+		Name:  "Python для начинающих",
+		Level: "Начальный",
+		Price: 1200.0,
+	},
+}
+
+type UserState struct {
+	Step     string
+	Selected *Course
+}
+
+var userStates = make(map[int64]*UserState)
+
 func main() {
-	// Замените YOUR_BOT_API_KEY на ваш токен
 	err := godotenv.Load(".env")
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 	}
 
+	// Получаем токен из переменной окружения
 	token := os.Getenv("TGBOT_API")
 	if token == "" {
 		log.Fatal("Токен не задан в переменной окружения TGBOT_API")
 	}
+
+	// Создаем нового бота с токеном из переменной окружения
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Fatal(err)
@@ -41,78 +68,81 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
-	// Список курсов
-	courses := []Course{
-		{
-			Name:        "Go для начинающих",
-			Level:       "Начальный",
-			Teacher:     "Иван Иванов",
-			Schedule:    "Понедельно, 18:00-20:00",
-			Description: "Основы языка Go. Изучение синтаксиса и базовых структур данных.",
-		},
-		{
-			Name:        "Go для продвинутых",
-			Level:       "Продвинутый",
-			Teacher:     "Алексей Петров",
-			Schedule:    "Вторник и четверг, 19:00-21:00",
-			Description: "Продвинутые техники работы с Go, асинхронное программирование, паттерны проектирования.",
-		},
-		{
-			Name:        "Python для начинающих",
-			Level:       "Начальный",
-			Teacher:     "Мария Сидорова",
-			Schedule:    "Среда, 17:00-19:00",
-			Description: "Основы Python. Создание простых программ и работа с библиотеками.",
-		},
-	}
-
 	for update := range updates {
 		if update.Message == nil {
 			continue
 		}
 
-		text := strings.ToLower(update.Message.Text)
+		// text := strings.ToLower(update.Message.Text)
+		text := (update.Message.Text)
 
 		var msg tgbotapi.MessageConfig
 
-		// Обрабатываем команды
-		switch {
-		case strings.HasPrefix(text, "/courses"):
-			coursesText := "Доступные курсы:\n\n"
-			for _, course := range courses {
-				coursesText += fmt.Sprintf(
-					"Название: %s\nУровень: %s\nПреподаватель: %s\nВремя: %s\nОписание: %s\n\n",
-					course.Name, course.Level, course.Teacher, course.Schedule, course.Description,
-				)
-			}
-			msg = tgbotapi.NewMessage(update.Message.Chat.ID, coursesText)
-
-		case strings.HasPrefix(text, "/teachers"):
-			teachersText := "Преподаватели:\n\n"
-			for _, course := range courses {
-				teachersText += fmt.Sprintf("Преподаватель: %s — %s\n", course.Teacher, course.Name)
-			}
-			msg = tgbotapi.NewMessage(update.Message.Chat.ID, teachersText)
-
-		case strings.HasPrefix(text, "/schedule"):
-			scheduleText := "Расписание курсов:\n\n"
-			for _, course := range courses {
-				scheduleText += fmt.Sprintf("Курс: %s — Время: %s\n", course.Name, course.Schedule)
-			}
-			msg = tgbotapi.NewMessage(update.Message.Chat.ID, scheduleText)
-
-		default:
-			if strings.Contains(text, "привет") {
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Привет! Я могу помочь выбрать курс, узнать расписание и преподавателей. Напиши /courses для списка курсов.")
-			} else if strings.Contains(text, "как дела") {
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "У меня все хорошо! Готов помочь выбрать курс. Напиши /courses.")
-			} else {
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Я не понял запрос. Напиши /courses для списка курсов или /schedule для расписания.")
-			}
+		// Получаем состояние пользователя или создаем новое, если оно отсутствует
+		userState, exists := userStates[update.Message.Chat.ID]
+		if !exists {
+			userState = &UserState{}
+			userStates[update.Message.Chat.ID] = userState
 		}
 
+		switch userState.Step {
+		case "":
+			// Шаг 1: Выбор курса
+			if text == "Выбрать курс" {
+				coursesText := "Выберите курс:\n"
+				for i, course := range courses {
+					coursesText += fmt.Sprintf("%d) %s — %s — %0.2f₽\n", i+1, course.Name, course.Level, course.Price)
+				}
+				coursesText += "\nОтправьте номер курса для выбора."
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, coursesText)
+				userState.Step = "waiting_for_course_selection"
+			} else {
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Привет! Напишите 'Выбрать курс' чтобы выбрать курс.")
+			}
+
+		case "waiting_for_course_selection":
+			// Шаг 2: Обработка выбора курса
+			if courseNumber, err := parseCourseSelection(text); err == nil && courseNumber >= 1 && courseNumber <= len(courses) {
+				selectedCourse := &courses[courseNumber-1]
+				userState.Selected = selectedCourse
+
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Вы выбрали курс: %s.\nЦена: %.2f₽\nХотите оплатить? Напишите 'Да' или 'Нет'.", selectedCourse.Name, selectedCourse.Price))
+				userState.Step = "waiting_for_payment_confirmation"
+			} else {
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Неверный номер курса. Пожалуйста, выберите курс по номеру.")
+			}
+
+		case "waiting_for_payment_confirmation":
+			// Шаг 3: Обработка подтверждения оплаты
+			if strings.Contains(text, "Да") {
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!")
+				userState.Step = "payment_successful"
+			} else if strings.Contains(text, "Нет") {
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Хорошо, подумайте еще. Напишите 'Выбрать курс', чтобы изменить выбор.")
+				userState.Step = ""
+			} else {
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, напишите 'Да' если вы оплатили, или 'Нет' если еще не оплатили.")
+			}
+
+		case "payment_successful":
+			msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Напишите 'Выбрать курс' для начала.")
+			userState.Step = ""
+
+		default:
+			msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Неизвестный шаг. Напишите 'Выбрать курс' для начала.")
+			userState.Step = ""
+		}
+
+		// Отправляем сообщение пользователю
 		if _, err := bot.Send(msg); err != nil {
 			log.Printf("Error sending message: %v", err)
 		}
 	}
+}
+
+// Функция для парсинга выбора курса пользователя
+func parseCourseSelection(text string) (int, error) {
+	var courseNumber int
+	_, err := fmt.Sscanf(text, "%d", &courseNumber)
+	return courseNumber, err
 }
