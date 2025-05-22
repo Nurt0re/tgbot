@@ -26,9 +26,26 @@ type Message struct {
 }
 
 type Enrollment struct {
+	UserID      int64 // Added UserID
 	Name        string
+	PhoneNumber string
 	CourseName  string
 	IsPaid      bool
+	TestScore   int
 	Timestamp   string
-	PhoneNumber string // Added PhoneNumber
+}
+
+type UserQuestion struct {
+	UserID       int64
+	Name         string // Added Name
+	PhoneNumber  string // Added PhoneNumber
+	QuestionText string
+	Timestamp    string
+}
+
+type UserQuestionDetail struct {
+	Name         string
+	PhoneNumber  string
+	QuestionText string
+	Timestamp    string
 }

@@ -61,8 +61,8 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 
 	if userState.Step == "waiting_for_name" {
 		userState.Name = strings.TrimSpace(text)
-		userState.Step = "waiting_for_phone"
-		msg := tgbotapi.NewMessage(chatID, "Спасибо! Теперь, пожалуйста, напиши свой номер телефона.")
+		userState.Step = "waiting_for_phone" // Changed next step
+		msg := tgbotapi.NewMessage(chatID, "Теперь, пожалуйста, введите ваш номер телефона.")
 		if _, err := bot.Send(msg); err != nil {
 			log.Printf("Ошибка при отправке запроса номера телефона: %v", err)
 		}
@@ -102,7 +102,9 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 	case "/enrollments":
 		sendEnrollments(botDB, bot, chatID)
 		return
-
+	case "/questions": // Added /questions command
+		sendUserQuestions(botDB, bot, chatID)
+		return
 	}
 
 	// Сохраняем входящее сообщение
@@ -123,7 +125,29 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 		msg = handlePaymentConfirmation(chatID, text, userState, bot, botDB)
 
 	case "payment_successful":
-		msg = tgbotapi.NewMessage(chatID, "Напишите 'Выбрать курс' для начала.")
+		// Ask if user has questions
+		userState.Step = "waiting_for_questions_prompt"
+		msg = tgbotapi.NewMessage(chatID, "Оплата прошла успешно! Есть ли у вас какие-либо вопросы? (Да/Нет)")
+
+	case "waiting_for_questions_prompt":
+		if strings.EqualFold(text, "Да") {
+			userState.Step = "waiting_for_question_text"
+			msg = tgbotapi.NewMessage(chatID, "Пожалуйста, напишите ваш вопрос.")
+		} else if strings.EqualFold(text, "Нет") {
+			msg = tgbotapi.NewMessage(chatID, "Хорошо! Напишите 'Выбрать курс' для нового выбора.")
+			userState.Step = ""
+		} else {
+			msg = tgbotapi.NewMessage(chatID, "Пожалуйста, ответьте 'Да' или 'Нет'.")
+		}
+
+	case "waiting_for_question_text":
+		// Pass user's name and phone number when saving the question
+		if err := storage.SaveUserQuestion(botDB, chatID, userState.Name, userState.PhoneNumber, text); err != nil {
+			log.Printf("Ошибка при сохранении вопроса пользователя: %v", err)
+			msg = tgbotapi.NewMessage(chatID, "Произошла ошибка при сохранении вашего вопроса. Попробуйте позже.")
+		} else {
+			msg = tgbotapi.NewMessage(chatID, "Ваш вопрос сохранен! Мы скоро с вами свяжемся. Напишите 'Выбрать курс' для нового выбора.")
+		}
 		userState.Step = ""
 
 	default:
@@ -169,7 +193,7 @@ func sendEnrollments(db *sql.DB, bot *tgbotapi.BotAPI, chatID int64) {
 		if e.IsPaid {
 			status = "✅ Оплачено"
 		}
-		b.WriteString(fmt.Sprintf("%d) %s (%s) — %s — %s — %s\n", i+1, e.Name, e.PhoneNumber, e.CourseName, status, e.Timestamp))
+		b.WriteString(fmt.Sprintf("%d) %s (Тел: %s) — %s — %s — %s (Баллы: %d)\n", i+1, e.Name, e.PhoneNumber, e.CourseName, status, e.Timestamp, e.TestScore))
 	}
 
 	// Разбивка на части, если слишком длинно
@@ -225,13 +249,14 @@ func handleCourseSelection(chatID int64, text string, state *entities.UserState,
 
 func handlePaymentConfirmation(chatID int64, text string, state *entities.UserState, bot *tgbotapi.BotAPI, botDB *sql.DB) tgbotapi.MessageConfig {
 	if strings.EqualFold(text, "Да") {
-		state.Step = "payment_successful"
-		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, true, state.PhoneNumber)
-		return tgbotapi.NewMessage(chatID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!")
+		state.Step = "payment_successful" // Next step is to ask for questions
+		storage.SaveEnrollment(botDB, chatID, state.Name, state.PhoneNumber, state.Selected.Name, true, state.TestScore)
+		// Message will be sent by the "payment_successful" case
+		return tgbotapi.NewMessage(chatID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!") // Placeholder, will be overridden
 	} else if strings.EqualFold(text, "Нет") {
 		state.Step = ""
-		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, false, state.PhoneNumber)
-		go remindUserLater(bot, botDB, chatID, state.Selected.Name, 7*24*time.Hour) // Pass botDB and courseName
+		storage.SaveEnrollment(botDB, chatID, state.Name, state.PhoneNumber, state.Selected.Name, false, state.TestScore)
+		go remindUserLater(bot, botDB, chatID, state.Selected.Name, 24*time.Hour) // Reminder after 24 hours
 		return tgbotapi.NewMessage(chatID, "Хорошо, подумайте еще. Напишите 'Выбрать курс', чтобы изменить выбор.")
 	}
 
@@ -350,7 +375,7 @@ func sendTestQuestion(bot *tgbotapi.BotAPI, chatID int64, index int) {
 	bot.Send(tgbotapi.NewMessage(chatID, b.String()))
 }
 
-func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer string, state *entities.UserState, courses []entities.Course) {
+func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer string, state *entities.UserState, courses []entities.Course) { // Corrected tgbotapi typo
 	answerIndex := -1
 	_, err := fmt.Sscanf(userAnswer, "%d", &answerIndex)
 
@@ -372,11 +397,7 @@ func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer s
 
 	if state.TestIndex >= len(testQuestions) {
 		state.IsTakingTest = false
-		state.Step = ""
-		// Сохраняем результат теста
-		if err := storage.SaveTestResult(db, chatID, state.Name, state.TestScore); err != nil {
-			log.Printf("Ошибка при сохранении результата теста: %v", err)
-		}
+		// state.Step = "" // Step will be set after recommendations
 		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Тест завершён! Вы набрали %d из %d баллов.", state.TestScore, len(testQuestions))))
 		sendRecommendedCourses(bot, db, chatID, state.TestScore)
 
@@ -384,8 +405,12 @@ func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer s
 		time.Sleep(2 * time.Second)
 
 		// Перевести пользователя к выбору курса
-		state.Step = "waiting_for_course_selection"
-		msg := handleInitialStep(chatID, "Выбрать курс", state, courses)
+		// The user will be prompted to select a course after recommendations or if they skip questions.
+		// For now, setting step to allow course selection flow to continue.
+		// The actual message for course selection will be triggered by handleInitialStep or similar logic
+		// based on the new state.Step value.
+		state.Step = "waiting_for_course_selection"                      // Ensure this step allows course selection flow
+		msg := handleInitialStep(chatID, "Выбрать курс", state, courses) // This will generate the course list
 		bot.Send(msg)
 		return
 	}
@@ -421,4 +446,37 @@ func sendRecommendedCourses(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, scor
 	}
 
 	bot.Send(tgbotapi.NewMessage(chatID, b.String()))
+}
+
+func sendUserQuestions(db *sql.DB, bot *tgbotapi.BotAPI, chatID int64) {
+	questions, err := storage.GetAllUserQuestions(db)
+	if err != nil {
+		log.Printf("Ошибка при получении вопросов пользователей: %v", err)
+		bot.Send(tgbotapi.NewMessage(chatID, "Произошла ошибка при получении вопросов пользователей."))
+		return
+	}
+
+	if len(questions) == 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "Вопросов пока нет."))
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("❓ Список вопросов от пользователей:\n\n")
+	for i, q := range questions {
+		// Use q.Name and q.PhoneNumber directly as they are now stored with the question
+		b.WriteString(fmt.Sprintf("%d) Имя: %s\n   Телефон: %s\n   Вопрос: %s\n   Время: %s\n\n", i+1, q.Name, q.PhoneNumber, q.QuestionText, q.Timestamp))
+	}
+
+	// Разбивка на части, если слишком длинно
+	const chunkSize = 4000
+	text := b.String()
+	for len(text) > 0 {
+		end := chunkSize
+		if len(text) < chunkSize {
+			end = len(text)
+		}
+		bot.Send(tgbotapi.NewMessage(chatID, text[:end]))
+		text = text[end:]
+	}
 }
