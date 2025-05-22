@@ -44,8 +44,16 @@ func initTables(db *sql.DB) error {
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id INTEGER,
 	name TEXT,
+	phone_number TEXT,
 	course_name TEXT,
 	is_paid BOOLEAN,
+	test_score INTEGER,
+	timestamp DATETIME
+);`,
+		`CREATE TABLE IF NOT EXISTS user_questions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER,
+	question_text TEXT,
 	timestamp DATETIME
 );`,
 	}
@@ -58,16 +66,16 @@ func initTables(db *sql.DB) error {
 	return nil
 }
 
-func SaveEnrollment(db *sql.DB, userID int64, name, courseName string, isPaid bool) error {
+func SaveEnrollment(db *sql.DB, userID int64, name, phoneNumber, courseName string, isPaid bool, testScore int) error {
 	query := `
-	INSERT INTO enrollments(user_id, name, course_name, is_paid, timestamp)
-	VALUES (?, ?, ?, ?, ?);`
-	_, err := db.Exec(query, userID, name, courseName, isPaid, time.Now())
+	INSERT INTO enrollments(user_id, name, phone_number, course_name, is_paid, test_score, timestamp)
+	VALUES (?, ?, ?, ?, ?, ?, ?);`
+	_, err := db.Exec(query, userID, name, phoneNumber, courseName, isPaid, testScore, time.Now())
 	return err
 }
 
 func GetAllEnrollments(db *sql.DB) ([]entities.Enrollment, error) {
-	query := `SELECT name, course_name, is_paid, timestamp FROM enrollments ORDER BY timestamp DESC`
+	query := `SELECT name, phone_number, course_name, is_paid, test_score, timestamp FROM enrollments ORDER BY timestamp DESC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -78,7 +86,7 @@ func GetAllEnrollments(db *sql.DB) ([]entities.Enrollment, error) {
 	for rows.Next() {
 		var e entities.Enrollment
 		var ts time.Time
-		err := rows.Scan(&e.Name, &e.CourseName, &e.IsPaid, &ts)
+		err := rows.Scan(&e.Name, &e.PhoneNumber, &e.CourseName, &e.IsPaid, &e.TestScore, &ts)
 		if err != nil {
 			return nil, err
 		}
@@ -200,4 +208,41 @@ func GetConversationHistory(db *sql.DB, userID int64) ([]entities.Message, error
 		history = append(history, msg)
 	}
 	return history, nil
+}
+
+func SaveUserQuestion(db *sql.DB, userID int64, questionText string) error {
+	query := `
+	INSERT INTO user_questions(user_id, question_text, timestamp)
+	VALUES (?, ?, ?);`
+	_, err := db.Exec(query, userID, questionText, time.Now())
+	return err
+}
+
+func GetAllUserQuestions(db *sql.DB) ([]entities.UserQuestionDetail, error) {
+	query := `
+	SELECT
+		e.name,
+		e.phone_number,
+		uq.question_text,
+		uq.timestamp
+	FROM user_questions uq
+	JOIN enrollments e ON uq.user_id = e.user_id
+	ORDER BY uq.timestamp DESC;`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var questions []entities.UserQuestionDetail
+	for rows.Next() {
+		var q entities.UserQuestionDetail
+		var ts time.Time
+		if err := rows.Scan(&q.Name, &q.PhoneNumber, &q.QuestionText, &ts); err != nil {
+			return nil, err
+		}
+		q.Timestamp = ts.Format("2006-01-02 15:04:05")
+		questions = append(questions, q)
+	}
+	return questions, nil
 }
