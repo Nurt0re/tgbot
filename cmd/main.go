@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"tgbot/internal/entities"
 	"tgbot/internal/storage"
 	"tgbot/internal/tgbot"
 
@@ -19,8 +18,6 @@ func init() {
 	}
 }
 
-var userStates = make(map[int64]*entities.UserState)
-
 func main() {
 	db, err := storage.InitDB()
 	if err != nil {
@@ -29,13 +26,11 @@ func main() {
 	defer db.Close()
 	storage.SeedCourses(db)
 
-	// Получаем токен из переменной окружения
 	token := os.Getenv("TGBOT_API")
 	if token == "" {
 		log.Fatal("Токен не задан в переменной окружения TGBOT_API")
 	}
 
-	// Создаем нового бота с токеном из переменной окружения
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Fatal(err)
@@ -48,9 +43,8 @@ func main() {
 	}
 }
 
-// Функция для парсинга выбора курса пользователя
-func parseCourseSelection(text string) (int, error) {
-	var courseNumber int
-	_, err := fmt.Sscanf(text, "%d", &courseNumber)
-	return courseNumber, err
-}
+// func parseCourseSelection(text string) (int, error) {
+// 	var courseNumber int
+// 	_, err := fmt.Sscanf(text, "%d", &courseNumber)
+// 	return courseNumber, err
+// }

@@ -41,13 +41,21 @@ func initTables(db *sql.DB) error {
 			timestamp DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS enrollments (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER,
-	name TEXT,
-	course_name TEXT,
-	is_paid BOOLEAN,
-	timestamp DATETIME
-);`,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER,
+			name TEXT,
+			course_name TEXT,
+			is_paid BOOLEAN,
+			timestamp DATETIME,
+			phone_number TEXT 
+		);`,
+		`CREATE TABLE IF NOT EXISTS test_results (
+			user_id INTEGER,
+			name TEXT,
+			score INTEGER,
+			timestamp DATETIME,
+			PRIMARY KEY (user_id, timestamp)
+		);`,
 	}
 
 	for _, stmt := range schema {
@@ -58,16 +66,16 @@ func initTables(db *sql.DB) error {
 	return nil
 }
 
-func SaveEnrollment(db *sql.DB, userID int64, name, courseName string, isPaid bool) error {
+func SaveEnrollment(db *sql.DB, userID int64, name, courseName string, isPaid bool, phoneNumber string) error {
 	query := `
-	INSERT INTO enrollments(user_id, name, course_name, is_paid, timestamp)
-	VALUES (?, ?, ?, ?, ?);`
-	_, err := db.Exec(query, userID, name, courseName, isPaid, time.Now())
+	INSERT INTO enrollments(user_id, name, course_name, is_paid, timestamp, phone_number)
+	VALUES (?, ?, ?, ?, ?, ?);`
+	_, err := db.Exec(query, userID, name, courseName, isPaid, time.Now(), phoneNumber)
 	return err
 }
 
 func GetAllEnrollments(db *sql.DB) ([]entities.Enrollment, error) {
-	query := `SELECT name, course_name, is_paid, timestamp FROM enrollments ORDER BY timestamp DESC`
+	query := `SELECT name, course_name, is_paid, timestamp, phone_number FROM enrollments ORDER BY timestamp DESC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -78,7 +86,30 @@ func GetAllEnrollments(db *sql.DB) ([]entities.Enrollment, error) {
 	for rows.Next() {
 		var e entities.Enrollment
 		var ts time.Time
-		err := rows.Scan(&e.Name, &e.CourseName, &e.IsPaid, &ts)
+		err := rows.Scan(&e.Name, &e.CourseName, &e.IsPaid, &ts, &e.PhoneNumber)
+		if err != nil {
+			return nil, err
+		}
+		e.Timestamp = ts.Format("2006-01-02 15:04:05")
+		results = append(results, e)
+	}
+
+	return results, nil
+}
+
+func GetEnrollmentsByUserIDAndCourse(db *sql.DB, userID int64, courseName string) ([]entities.Enrollment, error) {
+	query := `SELECT name, course_name, is_paid, timestamp, phone_number FROM enrollments WHERE user_id = ? AND course_name = ? ORDER BY timestamp DESC`
+	rows, err := db.Query(query, userID, courseName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []entities.Enrollment
+	for rows.Next() {
+		var e entities.Enrollment
+		var ts time.Time
+		err := rows.Scan(&e.Name, &e.CourseName, &e.IsPaid, &ts, &e.PhoneNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -200,4 +231,12 @@ func GetConversationHistory(db *sql.DB, userID int64) ([]entities.Message, error
 		history = append(history, msg)
 	}
 	return history, nil
+}
+
+func SaveTestResult(db *sql.DB, userID int64, name string, score int) error {
+	query := `
+	INSERT INTO test_results(user_id, name, score, timestamp)
+	VALUES (?, ?, ?, ?);`
+	_, err := db.Exec(query, userID, name, score, time.Now())
+	return err
 }

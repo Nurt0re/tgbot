@@ -16,60 +16,7 @@ import (
 type TestQuestion struct {
 	Question string
 	Options  []string
-	Answer   int // индекс правильного ответа (0–3)
-}
-
-var testQuestions = []TestQuestion{
-	{
-		Question: "Что такое переменная в программировании?",
-		Options:  []string{"Константа", "Указатель", "Область памяти с именем", "Цикл"},
-		Answer:   2,
-	},
-	{
-		Question: "Какой тип данных используется для целых чисел в Go?",
-		Options:  []string{"float", "string", "bool", "int"},
-		Answer:   3,
-	},
-	{
-		Question: "Какой символ используется для начала комментария в Go?",
-		Options:  []string{"//", "#", "--", "/*"},
-		Answer:   0,
-	},
-	{
-		Question: "Как объявить функцию в Go?",
-		Options:  []string{"def", "function", "func", "fn"},
-		Answer:   2,
-	},
-	{
-		Question: "Какой ключ используется для условного оператора?",
-		Options:  []string{"case", "for", "switch", "if"},
-		Answer:   3,
-	},
-	{
-		Question: "Как создать срез в Go?",
-		Options:  []string{"array()", "[]", "slice{}", "{}"},
-		Answer:   1,
-	},
-	{
-		Question: "Что такое goroutine?",
-		Options:  []string{"Тип данных", "Функция", "Отдельный поток выполнения", "Модуль"},
-		Answer:   2,
-	},
-	{
-		Question: "Как обозначается цикл с 5 итерациями?",
-		Options:  []string{"repeat 5", "for i := 0; i < 5; i++", "loop 5", "foreach 5"},
-		Answer:   1,
-	},
-	{
-		Question: "Какой оператор используется для присваивания?",
-		Options:  []string{"==", "->", "=", ":="},
-		Answer:   2,
-	},
-	{
-		Question: "Как обозначается пакет в начале файла Go?",
-		Options:  []string{"import", "package", "main", "module"},
-		Answer:   1,
-	},
+	Answer   int
 }
 
 func Run(bot *tgbotapi.BotAPI, db *sql.DB) error {
@@ -103,7 +50,6 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 	chatID := update.Message.Chat.ID
 	userState := getUserState(chatID)
 
-	// Если имя ещё не установлено и это первый контакт — просим ввести имя
 	if userState.Step == "" && userState.Name == "" {
 		userState.Step = "waiting_for_name"
 		msg := tgbotapi.NewMessage(chatID, "Привет! Напиши своё имя, чтобы начать.")
@@ -115,6 +61,16 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 
 	if userState.Step == "waiting_for_name" {
 		userState.Name = strings.TrimSpace(text)
+		userState.Step = "waiting_for_phone"
+		msg := tgbotapi.NewMessage(chatID, "Спасибо! Теперь, пожалуйста, напиши свой номер телефона.")
+		if _, err := bot.Send(msg); err != nil {
+			log.Printf("Ошибка при отправке запроса номера телефона: %v", err)
+		}
+		return
+	}
+
+	if userState.Step == "waiting_for_phone" {
+		userState.PhoneNumber = strings.TrimSpace(text)
 		userState.Step = "taking_test"
 		userState.IsTakingTest = true
 		userState.TestIndex = 0
@@ -124,6 +80,7 @@ func HandleConversation(botDB *sql.DB, bot *tgbotapi.BotAPI, courses []entities.
 		sendTestQuestion(bot, chatID, 0)
 		return
 	}
+
 	if userState.IsTakingTest {
 		handleTestStep(bot, botDB, chatID, text, userState, courses)
 		return
@@ -212,7 +169,7 @@ func sendEnrollments(db *sql.DB, bot *tgbotapi.BotAPI, chatID int64) {
 		if e.IsPaid {
 			status = "✅ Оплачено"
 		}
-		b.WriteString(fmt.Sprintf("%d) %s — %s — %s — %s\n", i+1, e.Name, e.CourseName, status, e.Timestamp))
+		b.WriteString(fmt.Sprintf("%d) %s (%s) — %s — %s — %s\n", i+1, e.Name, e.PhoneNumber, e.CourseName, status, e.Timestamp))
 	}
 
 	// Разбивка на части, если слишком длинно
@@ -269,12 +226,12 @@ func handleCourseSelection(chatID int64, text string, state *entities.UserState,
 func handlePaymentConfirmation(chatID int64, text string, state *entities.UserState, bot *tgbotapi.BotAPI, botDB *sql.DB) tgbotapi.MessageConfig {
 	if strings.EqualFold(text, "Да") {
 		state.Step = "payment_successful"
-		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, true)
+		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, true, state.PhoneNumber)
 		return tgbotapi.NewMessage(chatID, "Отлично! Ваш платеж был успешно принят. Спасибо за оплату!")
 	} else if strings.EqualFold(text, "Нет") {
 		state.Step = ""
-		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, false)
-		go remindUserLater(bot, chatID)
+		storage.SaveEnrollment(botDB, chatID, state.Name, state.Selected.Name, false, state.PhoneNumber)
+		go remindUserLater(bot, botDB, chatID, state.Selected.Name, 7*24*time.Hour) // Pass botDB and courseName
 		return tgbotapi.NewMessage(chatID, "Хорошо, подумайте еще. Напишите 'Выбрать курс', чтобы изменить выбор.")
 	}
 
@@ -287,11 +244,24 @@ func parseCourseSelection(input string) (int, error) {
 	return number, err
 }
 
-func remindUserLater(bot *tgbotapi.BotAPI, chatID int64) {
-	time.Sleep(1 * time.Minute)
+func remindUserLater(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, courseName string, duration time.Duration) { // Added db and courseName parameters
+	time.Sleep(duration)
 
 	userState := getUserState(chatID)
-	if userState.Step == "" || userState.Step == "waiting_for_course_selection" {
+	// Проверяем, оплатил ли пользователь курс за это время
+	enrollments, err := storage.GetEnrollmentsByUserIDAndCourse(db, chatID, courseName) // Use passed db and courseName
+	if err == nil && len(enrollments) > 0 && enrollments[0].IsPaid {
+		return // Пользователь уже оплатил
+	}
+
+	// Если курс все еще не оплачен или пользователь не выбрал новый
+	if userState.Selected != nil && userState.Selected.Name == courseName { // Check if the reminder is still for the same course
+		msgText := fmt.Sprintf("Напоминаем, что вы выбрали курс '%s', но еще не оплатили его. Напишите 'Выбрать курс', чтобы выбрать другой курс, или свяжитесь с нами для оплаты.", courseName)
+		msg := tgbotapi.NewMessage(chatID, msgText)
+		if _, err := bot.Send(msg); err != nil {
+			log.Printf("Error sending reminder: %v", err)
+		}
+	} else if userState.Step == "" || userState.Step == "waiting_for_course_selection" { // Generic reminder if no specific course context or user moved on
 		msg := tgbotapi.NewMessage(chatID, "Вы еще не выбрали курс или не завершили оплату. Напишите 'Выбрать курс' чтобы начать заново.")
 		if _, err := bot.Send(msg); err != nil {
 			log.Printf("Error sending reminder: %v", err)
@@ -403,6 +373,10 @@ func handleTestStep(bot *tgbotapi.BotAPI, db *sql.DB, chatID int64, userAnswer s
 	if state.TestIndex >= len(testQuestions) {
 		state.IsTakingTest = false
 		state.Step = ""
+		// Сохраняем результат теста
+		if err := storage.SaveTestResult(db, chatID, state.Name, state.TestScore); err != nil {
+			log.Printf("Ошибка при сохранении результата теста: %v", err)
+		}
 		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Тест завершён! Вы набрали %d из %d баллов.", state.TestScore, len(testQuestions))))
 		sendRecommendedCourses(bot, db, chatID, state.TestScore)
 

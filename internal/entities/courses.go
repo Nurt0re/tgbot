@@ -12,6 +12,7 @@ type Course struct {
 type UserState struct {
 	Step         string
 	Name         string
+	PhoneNumber  string // Added PhoneNumber
 	Selected     *Course
 	TestIndex    int
 	TestScore    int
@@ -23,9 +24,11 @@ type Message struct {
 	Text      string
 	Timestamp string
 }
+
 type Enrollment struct {
-	Name       string
-	CourseName string
-	IsPaid     bool
-	Timestamp  string
+	Name        string
+	CourseName  string
+	IsPaid      bool
+	Timestamp   string
+	PhoneNumber string // Added PhoneNumber
 }
